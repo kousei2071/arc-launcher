@@ -56,6 +56,58 @@ def is_available() -> bool:
     return is_vibrancy_available() or is_liquid_glass_available()
 
 
+def raise_qt_content_above_glass(widget: QWidget) -> None:
+    """NSVisualEffectView 再合成後に Qt 描画レイヤーを前面へ戻す。"""
+    if sys.platform != "darwin" or int(widget.winId()) == 0:
+        return
+
+    try:
+        import objc
+        from ctypes import c_void_p
+
+        ns_view = objc.objc_object(c_void_p=int(widget.winId()))
+        if ns_view is not None:
+            _raise_qt_above_glass(ns_view)
+    except Exception:
+        pass
+
+
+def apply_mac_window_presentation(widget: QWidget) -> None:
+    """デスクトップ／他アプリ操作後も前面に出すための NSWindow 設定。"""
+    if sys.platform != "darwin" or int(widget.winId()) == 0:
+        return
+
+    try:
+        import objc
+        from ctypes import c_void_p
+        from AppKit import (
+            NSApp,
+            NSFloatingWindowLevel,
+            NSWindowCollectionBehaviorCanJoinAllSpaces,
+            NSWindowCollectionBehaviorFullScreenAuxiliary,
+        )
+
+        NSApp.activateIgnoringOtherApps_(True)
+
+        ns_view = objc.objc_object(c_void_p=int(widget.winId()))
+        if ns_view is None:
+            return
+
+        ns_window = ns_view.window()
+        if ns_window is None:
+            return
+
+        ns_window.setLevel_(NSFloatingWindowLevel)
+        behavior = int(ns_window.collectionBehavior())
+        behavior |= int(NSWindowCollectionBehaviorCanJoinAllSpaces)
+        behavior |= int(NSWindowCollectionBehaviorFullScreenAuxiliary)
+        ns_window.setCollectionBehavior_(behavior)
+        ns_window.orderFrontRegardless()
+        raise_qt_content_above_glass(widget)
+    except Exception:
+        pass
+
+
 def apply_mac_transparency(widget: QWidget) -> None:
     if sys.platform != "darwin" or int(widget.winId()) == 0:
         return

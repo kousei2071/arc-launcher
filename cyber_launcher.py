@@ -15,7 +15,7 @@ import sys
 from dataclasses import dataclass
 from typing import Callable
 
-from PyQt6.QtCore import QPointF, QRectF, Qt, QTimer, pyqtSlot
+from PyQt6.QtCore import QPointF, QRectF, Qt, QTimer, pyqtSlot, QEvent
 from PyQt6.QtGui import (
     QBitmap,
     QBrush,
@@ -34,7 +34,9 @@ from PyQt6.QtWidgets import QApplication, QWidget
 
 from app_icons import load_mac_app_icon
 from mac_vibrancy import apply_mac_transparency
+from mac_vibrancy import apply_mac_window_presentation
 from mac_vibrancy import is_available as native_glass_available
+from mac_vibrancy import raise_qt_content_above_glass
 from mac_vibrancy import schedule_mac_glass
 
 WINDOW_SIZE = 540
@@ -639,9 +641,18 @@ class CircularLauncherWindow(CursorRadialMenu):
         y = max(geo.y(), min(y, geo.y() + geo.height() - self.height()))
         self.move(x, y)
 
+    def _sync_shown_state(self) -> None:
+        """Qt の実表示と内部フラグのズレを解消（スペース切替・デスクトップ表示後）。"""
+        if not self.isVisible() or self.isMinimized():
+            self._shown = False
+
+    def _is_effectively_visible(self) -> bool:
+        self._sync_shown_state()
+        return self._shown
+
     @pyqtSlot()
     def toggle_visibility(self) -> None:
-        if self._shown:
+        if self._is_effectively_visible():
             self._dismiss()
         else:
             self.present()
@@ -652,10 +663,12 @@ class CircularLauncherWindow(CursorRadialMenu):
         self._shown = False
 
     def present(self) -> None:
+        self._sync_shown_state()
         self._move_to_cursor()
         self._set_hover(None)
         apply_mac_transparency(self)
         self.showNormal()
+        apply_mac_window_presentation(self)
         _apply_circular_window_mask(self)
         self.raise_()
         self.activateWindow()
@@ -667,15 +680,22 @@ class CircularLauncherWindow(CursorRadialMenu):
             def _on_glass(mode: str) -> None:
                 self._glass_kind = mode
                 apply_mac_transparency(self)
+                apply_mac_window_presentation(self)
                 _apply_circular_window_mask(self)
                 self.update()
 
             schedule_mac_glass(self, panel_diameter=panel, on_result=_on_glass)
+        elif self._mac_glass_enabled and self._glass_kind != "none":
+            raise_qt_content_above_glass(self)
 
         self.update()
         QTimer.singleShot(80, self._bring_to_front)
+        QTimer.singleShot(250, self._bring_to_front)
 
     def _bring_to_front(self) -> None:
+        if not self._shown:
+            return
+        apply_mac_window_presentation(self)
         self.raise_()
         self.activateWindow()
         self.update()
@@ -692,6 +712,11 @@ class CircularLauncherWindow(CursorRadialMenu):
     def hideEvent(self, event) -> None:  # noqa: N802
         self._shown = False
         super().hideEvent(event)
+
+    def changeEvent(self, event) -> None:  # noqa: N802
+        if event.type() == QEvent.Type.WindowStateChange:
+            self._sync_shown_state()
+        super().changeEvent(event)
 
 
 GLOBAL_QSS = "QWidget { background: transparent; }"
