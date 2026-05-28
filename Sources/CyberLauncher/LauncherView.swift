@@ -1,29 +1,52 @@
 import AppKit
+import QuartzCore
+
+private struct Sparkle {
+    let angle: CGFloat
+    let radius: CGFloat
+    let speed: CGFloat
+    let size: CGFloat
+    let alpha: CGFloat
+}
 
 final class LauncherView: NSView {
     private let items: [LauncherItem]
     private var hoverIndex: Int?
-    private var pulse: CGFloat = 0
-    private var orbitRotation: CGFloat = 0
+    private var phase: CGFloat = 0
     private var slotGlow: [CGFloat]
     private var slotGlowTarget: [CGFloat]
     private var timer: Timer?
+    private var slotViews: [GlassSlotView] = []
+    private let centerView = GlassCenterView()
+    private let sparkles: [Sparkle]
     var glassMode: GlassMode = .none
     weak var launcherWindow: CircularLauncherWindow?
 
     init(items: [LauncherItem]) {
         self.items = items
-        self.slotGlow = Array(repeating: 0.4, count: items.count)
-        self.slotGlowTarget = Array(repeating: 0.4, count: items.count)
+        self.slotGlow = Array(repeating: 0, count: items.count)
+        self.slotGlowTarget = Array(repeating: 0, count: items.count)
+        var generatedSparkles: [Sparkle] = []
+        for index in 0..<72 {
+            let angle = CGFloat(index) * CGFloat.pi * 2 / 72
+            let radius = CGFloat(74 + (index * 37) % 150)
+            let speed = 0.45 + CGFloat((index * 11) % 40) / 100
+            let size = 1.4 + CGFloat((index * 7) % 24) / 10
+            let alpha = 0.18 + CGFloat((index * 13) % 35) / 100
+            generatedSparkles.append(Sparkle(angle: angle, radius: radius, speed: speed, size: size, alpha: alpha))
+        }
+        self.sparkles = generatedSparkles
         super.init(frame: NSRect(x: 0, y: 0, width: windowSize, height: windowSize))
+
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
+        setUpGlassControls()
         addTrackingArea(NSTrackingArea(
             rect: bounds,
             options: [.activeAlways, .mouseMoved, .mouseEnteredAndExited, .inVisibleRect],
             owner: self
         ))
-        timer = Timer.scheduledTimer(withTimeInterval: 0.04, repeats: true) { [weak self] _ in
+        timer = Timer.scheduledTimer(withTimeInterval: 1 / 60, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.tickAnimation()
             }
@@ -45,29 +68,102 @@ final class LauncherView: NSView {
         glassMode == .liquid || glassMode == .vibrancy
     }
 
+    override func layout() {
+        super.layout()
+        layoutGlassControls(animated: false)
+    }
+
+    private func setUpGlassControls() {
+        centerView.alphaValue = 0.92
+        addSubview(centerView)
+
+        slotViews = items.map { item in
+            let view = GlassSlotView(item: item)
+            view.alphaValue = 0.96
+            addSubview(view)
+            return view
+        }
+        layoutGlassControls(animated: false)
+        updateGlassControls()
+    }
+
     private func tickAnimation() {
-        pulse = (pulse + 0.035).truncatingRemainder(dividingBy: 2 * .pi)
-        orbitRotation = (orbitRotation + 0.4).truncatingRemainder(dividingBy: 360)
-        for index in slotGlowTarget.indices {
+        phase = (phase + 0.018).truncatingRemainder(dividingBy: .pi * 2)
+        for index in slotGlow.indices {
             let current = slotGlow[index]
             let target = slotGlowTarget[index]
-            if abs(current - target) > 0.008 {
-                slotGlow[index] = current + (target - current) * 0.22
-            }
+            slotGlow[index] = current + (target - current) * 0.18
         }
+        layoutGlassControls(animated: true)
+        updateGlassControls()
         needsDisplay = true
     }
 
+    private func layoutGlassControls(animated: Bool) {
+        guard !bounds.isEmpty else { return }
+
+        let center = geometry.center
+        let centerSide = hoverIndex == nil ? CGFloat(72) : CGFloat(104)
+        setFrame(
+            CGRect(x: center.x - centerSide / 2, y: center.y - centerSide / 2, width: centerSide, height: centerSide),
+            on: centerView,
+            animated: animated
+        )
+
+        for (index, view) in slotViews.enumerated() {
+            let position = geometry.slotPosition(index: index)
+            let float = sin(phase * 1.8 + CGFloat(index) * 0.7) * 4
+            let glow = slotGlow[index]
+            let side = CGFloat(74) + glow * 20
+            setFrame(
+                CGRect(
+                    x: position.x - side / 2,
+                    y: position.y - side / 2 + float,
+                    width: side,
+                    height: side
+                ),
+                on: view,
+                animated: animated
+            )
+        }
+    }
+
+    private func setFrame(_ frame: CGRect, on view: NSView, animated: Bool) {
+        if animated {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.16
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                view.animator().frame = frame
+            }
+        } else {
+            view.frame = frame
+        }
+    }
+
+    private func updateGlassControls() {
+        for (index, view) in slotViews.enumerated() {
+            let hovered = index == hoverIndex
+            view.setHoverAmount(slotGlow[index], selected: hovered)
+        }
+
+        if let hoverIndex {
+            centerView.configure(item: items[hoverIndex], accent: slotAccents[hoverIndex % slotAccents.count], phase: phase)
+        } else {
+            centerView.configureIdle(phase: phase)
+        }
+    }
+
     private func index(at point: CGPoint) -> Int? {
-        geometry.index(at: point, glows: slotGlow, nativeUI: nativeUI)
+        geometry.index(at: point, glows: slotGlow.map { 0.4 + $0 * 0.6 }, nativeUI: nativeUI)
     }
 
     private func setHover(index: Int?) {
         guard index != hoverIndex else { return }
         for slot in slotGlowTarget.indices {
-            slotGlowTarget[slot] = slot == index ? 1.0 : 0.4
+            slotGlowTarget[slot] = slot == index ? 1 : 0
         }
         hoverIndex = index
+        updateGlassControls()
         NSCursor.pop()
         (index == nil ? NSCursor.arrow : NSCursor.pointingHand).push()
     }
@@ -102,250 +198,212 @@ final class LauncherView: NSView {
         context.setAllowsAntialiasing(true)
 
         let center = geometry.center
-        paintBackdrop(context: context, center: center)
-        paintOrbitGuides(context: context, center: center)
-        paintCenterHub(context: context, center: center)
-
-        for (index, item) in items.enumerated() {
-            paintSlot(
-                context: context,
-                item: item,
-                position: geometry.slotPosition(index: index),
-                glow: slotGlow[index],
-                hovered: index == hoverIndex,
-                index: index
-            )
-        }
+        drawAmbientField(context: context, center: center)
+        drawGlassRings(context: context, center: center)
+        drawSparkles(context: context, center: center)
+        drawPointerBeams(context: context, center: center)
     }
 
-    private func paintBackdrop(context: CGContext, center: CGPoint) {
-        let platePulse = 0.98 + 0.02 * sin(pulse)
-        let radius = defaultOrbitRadius * 1.18 * platePulse
-        let emphasis: CGFloat = glassMode == .none ? 0.78 : (glassMode == .vibrancy ? 0.68 : 0.62)
-        paintPremiumGlassPlate(context: context, center: center, radius: radius, emphasis: emphasis)
-    }
-
-    private func paintPremiumGlassPlate(context: CGContext, center: CGPoint, radius: CGFloat, emphasis: CGFloat) {
-        for index in stride(from: 6, through: 1, by: -1) {
-            context.setFillColor(NSColor.black.withAlpha(CGFloat(6 + index * 6) / 255 * emphasis).cgColor)
-            context.fillEllipse(in: ellipseRect(center: center, radiusX: radius + CGFloat(index) * 3, radiusY: radius + CGFloat(index) * 2.85))
-        }
-
+    private func drawAmbientField(context: CGContext, center: CGPoint) {
         drawRadialGradient(
             context: context,
             center: center,
-            radius: radius * 1.2,
+            radius: 250,
             colors: [
-                NSColor.white.withAlpha(72 / 255 * emphasis),
-                NSColor(calibratedRed: 240 / 255, green: 248 / 255, blue: 1, alpha: 48 / 255 * emphasis),
-                NSColor(calibratedRed: 220 / 255, green: 230 / 255, blue: 1, alpha: 28 / 255 * emphasis),
-                NSColor(calibratedRed: 200 / 255, green: 180 / 255, blue: 1, alpha: 14 / 255 * emphasis),
-                NSColor.white.withAlpha(0)
+                accentCyan.withAlpha(0.10),
+                accentViolet.withAlpha(0.06),
+                NSColor.clear
             ],
-            locations: [0, 0.25, 0.55, 0.82, 1]
+            locations: [0, 0.48, 1]
         )
-
-        drawLinearGradient(
-            context: context,
-            rect: ellipseRect(center: center, radiusX: radius * 0.97, radiusY: radius * 0.95),
-            start: CGPoint(x: center.x - radius * 0.75, y: center.y - radius),
-            end: CGPoint(x: center.x + radius * 0.4, y: center.y + radius * 0.35),
-            colors: [
-                NSColor.white.withAlpha(95 / 255 * emphasis),
-                NSColor(calibratedRed: 200 / 255, green: 240 / 255, blue: 1, alpha: 35 / 255 * emphasis),
-                NSColor.white.withAlpha(0)
-            ],
-            locations: [0, 0.35, 1]
-        )
-
-        for (index, color) in [accentCyan, accentViolet, accentPink, accentCyan].enumerated() {
-            context.setStrokeColor(color.withAlpha(CGFloat(35 + index * 12) / 255 * emphasis).cgColor)
-            context.setLineWidth(1.8 - CGFloat(index) * 0.25)
-            context.strokeEllipse(in: ellipseRect(center: center, radiusX: radius + 1.5 - CGFloat(index) * 0.4, radiusY: radius + 1.5 - CGFloat(index) * 0.4))
-        }
-
-        context.setStrokeColor(NSColor.white.withAlpha(150 / 255 * emphasis).cgColor)
-        context.setLineWidth(1.2)
-        context.strokeEllipse(in: ellipseRect(center: center, radiusX: radius, radiusY: radius))
-
-        drawArc(context: context, center: center, radius: radius, startDegrees: 160 - orbitRotation, sweepDegrees: 55, color: NSColor.white.withAlpha(65 / 255 * emphasis), width: 2)
-        drawArc(context: context, center: center, radius: radius, startDegrees: 340 - orbitRotation * 0.7, sweepDegrees: 40, color: NSColor(calibratedRed: 180 / 255, green: 220 / 255, blue: 1, alpha: 40 / 255 * emphasis), width: 1)
     }
 
-    private func paintOrbitGuides(context: CGContext, center: CGPoint) {
-        let platePulse = 0.98 + 0.02 * sin(pulse)
-        let radius = defaultOrbitRadius * platePulse
+    private func drawGlassRings(context: CGContext, center: CGPoint) {
+        for ring in 0..<5 {
+            let ringPhase = phase + CGFloat(ring) * 0.72
+            let radius = defaultOrbitRadius * (0.46 + CGFloat(ring) * 0.15) + sin(ringPhase * 1.6) * 5
+            let alpha = 0.10 + CGFloat(ring) * 0.025
+            context.setStrokeColor(NSColor.white.withAlpha(alpha).cgColor)
+            context.setLineWidth(0.8 + CGFloat(ring) * 0.35)
+            context.strokeEllipse(in: ellipseRect(center: center, radiusX: radius, radiusY: radius))
 
-        for (ratio, alpha): (CGFloat, CGFloat) in [(0.58, 18), (0.78, 28), (0.92, 38), (1.06, 22)] {
-            context.setStrokeColor(NSColor.white.withAlpha(alpha / 255).cgColor)
-            context.setLineWidth(0.6 + ratio * 0.4)
-            context.strokeEllipse(in: ellipseRect(center: center, radiusX: radius * ratio, radiusY: radius * ratio))
-        }
-
-        let glowPulse = 0.65 + 0.35 * sin(pulse * 1.3)
-        context.setStrokeColor(accentCyan.withAlpha(90 / 255 * glowPulse).cgColor)
-        context.setLineWidth(2)
-        context.strokeEllipse(in: ellipseRect(center: center, radiusX: radius, radiusY: radius))
-        context.setStrokeColor(NSColor.white.withAlpha(50 / 255 * glowPulse).cgColor)
-        context.setLineWidth(0.8)
-        context.strokeEllipse(in: ellipseRect(center: center, radiusX: radius * 0.98, radiusY: radius * 0.98))
-
-        for segment in 0..<16 where segment.isMultiple(of: 2) {
             drawArc(
                 context: context,
                 center: center,
-                radius: radius,
-                startDegrees: CGFloat(segment) * 22.5 - orbitRotation,
-                sweepDegrees: -16,
-                color: slotAccents[segment % slotAccents.count].withAlpha(55 / 255),
-                width: 1.8
+                radius: radius + 8,
+                startDegrees: radiansToDegrees(ringPhase) * (ring.isMultiple(of: 2) ? 1 : -1),
+                sweepDegrees: 54 + CGFloat(ring) * 10,
+                color: slotAccents[ring % slotAccents.count].withAlpha(0.26),
+                width: 2.4
             )
         }
-
-        for tick in 0..<72 {
-            let angle = degreesToRadians(CGFloat(tick) * 5 + orbitRotation)
-            let major = tick.isMultiple(of: 6)
-            let inner = radius * (major ? 1.02 : 1.01)
-            let outer = radius * (major ? 1.09 : 1.045)
-            let color = major ? accentCyan.withAlpha(90 / 255) : NSColor.white.withAlpha(35 / 255)
-            context.setStrokeColor(color.cgColor)
-            context.setLineWidth(major ? 1.6 : 0.5)
-            context.move(to: CGPoint(x: center.x + inner * cos(angle), y: center.y + inner * sin(angle)))
-            context.addLine(to: CGPoint(x: center.x + outer * cos(angle), y: center.y + outer * sin(angle)))
-            context.strokePath()
-        }
-
-        for index in items.indices {
-            let position = geometry.slotPosition(index: index)
-            let hovered = index == hoverIndex
-            let accent = slotAccents[index % slotAccents.count]
-            context.setStrokeColor(NSColor.white.withAlpha(hovered ? 45 / 255 : 22 / 255).cgColor)
-            context.setLineWidth(hovered ? 1 : 0.65)
-            context.move(to: center)
-            context.addLine(to: position)
-            context.strokePath()
-
-            let angle = (2 * CGFloat.pi * CGFloat(index) / CGFloat(items.count)) - (CGFloat.pi / 2)
-            let marker = CGPoint(x: center.x + radius * cos(angle), y: center.y + radius * sin(angle))
-            drawRadialGradient(
-                context: context,
-                center: marker,
-                radius: hovered ? 9.9 : 6.3,
-                colors: [
-                    NSColor.white.withAlpha(hovered ? 200 / 255 : 100 / 255),
-                    accent.withAlpha(hovered ? 120 / 255 : 50 / 255),
-                    accent.withAlpha(0)
-                ],
-                locations: [0, 0.5, 1]
-            )
-        }
-
-        drawRadialGradient(
-            context: context,
-            center: center,
-            radius: defaultOrbitRadius * 0.21,
-            colors: [
-                NSColor.white.withAlpha(50 / 255),
-                accentCyan.withAlpha(30 / 255),
-                NSColor.white.withAlpha(0)
-            ],
-            locations: [0, 0.5, 1]
-        )
-        context.setStrokeColor(NSColor.white.withAlpha(55 / 255).cgColor)
-        context.setLineWidth(0.9)
-        let cross = defaultOrbitRadius * 0.119
-        context.move(to: CGPoint(x: center.x - cross, y: center.y))
-        context.addLine(to: CGPoint(x: center.x + cross, y: center.y))
-        context.move(to: CGPoint(x: center.x, y: center.y - cross))
-        context.addLine(to: CGPoint(x: center.x, y: center.y + cross))
-        context.strokePath()
     }
 
-    private func paintCenterHub(context: CGContext, center: CGPoint) {
-        let hubPulse = 0.92 + 0.08 * sin(pulse * 2)
-        if hoverIndex == nil {
-            paintIconPedestal(context: context, center: center, radius: 22 * hubPulse, accent: accentCyan, glow: 0.55, hovered: false)
-            return
+    private func drawSparkles(context: CGContext, center: CGPoint) {
+        for sparkle in sparkles {
+            let angle = sparkle.angle + phase * sparkle.speed
+            let wobble = sin(phase * 2.2 + sparkle.angle * 3) * 10
+            let point = CGPoint(
+                x: center.x + (sparkle.radius + wobble) * cos(angle),
+                y: center.y + (sparkle.radius + wobble) * sin(angle)
+            )
+            let pulse = 0.45 + 0.55 * sin(phase * 3.4 + sparkle.angle * 5)
+            context.setFillColor(NSColor.white.withAlpha(sparkle.alpha * pulse).cgColor)
+            context.fillEllipse(in: CGRect(x: point.x - sparkle.size / 2, y: point.y - sparkle.size / 2, width: sparkle.size, height: sparkle.size))
         }
+    }
 
+    private func drawPointerBeams(context: CGContext, center: CGPoint) {
         guard let hoverIndex else { return }
-        let item = items[hoverIndex]
+        let target = geometry.slotPosition(index: hoverIndex)
         let accent = slotAccents[hoverIndex % slotAccents.count]
-        let hubRadius = centerHubSize * 0.48 * hubPulse
-        paintIconPedestal(context: context, center: center, radius: hubRadius + 8, accent: accent, glow: 1, hovered: true)
-        for index in stride(from: 5, through: 1, by: -1) {
-            context.setFillColor(accent.withAlpha(CGFloat(30 / index) / 255).cgColor)
-            context.fillEllipse(in: ellipseRect(center: center, radiusX: hubRadius + CGFloat(index) * 5, radiusY: hubRadius + CGFloat(index) * 5))
+        for offset in 0..<4 {
+            context.setStrokeColor(accent.withAlpha(0.15 - CGFloat(offset) * 0.025).cgColor)
+            context.setLineWidth(6 - CGFloat(offset))
+            context.move(to: center)
+            context.addLine(to: target)
+            context.strokePath()
         }
-        paintIconTile(context: context, center: center, icon: item.icon, size: centerHubSize * hubPulse, hovered: true, accent: accent, glow: 1)
-        drawLabel(text: item.appName, rect: CGRect(x: center.x - 95, y: center.y + centerHubSize * 0.52 + 14, width: 190, height: 24), prominent: true)
+    }
+}
+
+private final class GlassSlotView: NSView {
+    private let glassView: NSView
+    private let iconView = NSImageView()
+    private let labelField = NSTextField(labelWithString: "")
+    private let accent: NSColor
+
+    init(item: LauncherItem) {
+        self.glassView = makeGlassSurface()
+        self.accent = slotAccents[abs(item.appName.hashValue) % slotAccents.count]
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.shadowColor = NSColor.black.cgColor
+        layer?.shadowOffset = CGSize(width: 0, height: -6)
+        layer?.shadowOpacity = 0.28
+        layer?.shadowRadius = 18
+
+        glassView.frame = bounds
+        glassView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(glassView)
+
+        iconView.image = item.icon
+        iconView.imageScaling = .scaleProportionallyUpOrDown
+        iconView.frame = CGRect(x: 15, y: 12, width: 44, height: 44)
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(iconView)
+
+        labelField.stringValue = item.appName
+        labelField.alignment = .center
+        labelField.font = .systemFont(ofSize: 9, weight: .semibold)
+        labelField.textColor = .white.withAlphaComponent(0.88)
+        labelField.frame = CGRect(x: -18, y: 58, width: 110, height: 18)
+        labelField.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(labelField)
     }
 
-    private func paintSlot(context: CGContext, item: LauncherItem, position: CGPoint, glow: CGFloat, hovered: Bool, index: Int) {
-        let accent = slotAccents[index % slotAccents.count]
-        paintIconTile(context: context, center: position, icon: item.icon, size: iconTileSize + (glow - 0.4) * 12, hovered: hovered, accent: accent, glow: glow)
-        drawLabel(text: item.appName, rect: CGRect(x: position.x - 54, y: position.y + iconTileSize * 0.55 + 6, width: 108, height: 18), prominent: hovered)
+    required init?(coder: NSCoder) {
+        nil
     }
 
-    private func paintIconTile(context: CGContext, center: CGPoint, icon: NSImage, size: CGFloat, hovered: Bool, accent: NSColor, glow: CGFloat) {
-        let scale = 1 + (glow - 0.4) * 0.22
-        let side = size * scale
-        let pedestalRadius = side * 0.52
-        paintIconPedestal(context: context, center: center, radius: pedestalRadius, accent: accent, glow: glow, hovered: hovered)
-
-        if hovered {
-            for index in stride(from: 4, through: 1, by: -1) {
-                context.setFillColor(accent.withAlpha(CGFloat(25 / index) / 255).cgColor)
-                context.fillEllipse(in: ellipseRect(center: center, radiusX: pedestalRadius + CGFloat(index) * 4, radiusY: pedestalRadius + CGFloat(index) * 4))
-            }
-        }
-
-        let rect = CGRect(x: center.x - side / 2, y: center.y - side / 2, width: side, height: side)
-        icon.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high])
+    override func layout() {
+        super.layout()
+        setFrameIfChanged(bounds, on: glassView)
+        applyCircularMask(to: glassView)
+        let iconSide = min(bounds.width, bounds.height) * 0.58
+        setFrameIfChanged(CGRect(x: (bounds.width - iconSide) / 2, y: (bounds.height - iconSide) / 2 - 2, width: iconSide, height: iconSide), on: iconView)
+        setFrameIfChanged(CGRect(x: -22, y: bounds.height - 4, width: bounds.width + 44, height: 18), on: labelField)
     }
 
-    private func paintIconPedestal(context: CGContext, center: CGPoint, radius: CGFloat, accent: NSColor, glow: CGFloat, hovered: Bool) {
-        let pedestalRadius = radius * (1.05 + (glow - 0.4) * 0.12)
-        for index in stride(from: 3, through: 1, by: -1) {
-            context.setStrokeColor(accent.withAlpha(CGFloat(8 + index * 6) / 255 * glow).cgColor)
-            context.setLineWidth(1.2 + (glow - 0.4))
-            context.strokeEllipse(in: ellipseRect(center: center, radiusX: pedestalRadius + CGFloat(index) * 2.5, radiusY: pedestalRadius + CGFloat(index) * 2.5))
-        }
+    func setHoverAmount(_ amount: CGFloat, selected: Bool) {
+        layer?.shadowOpacity = Float(0.24 + amount * 0.32)
+        layer?.shadowRadius = 14 + amount * 18
+        let scale = 1 + amount * 0.12
+        layer?.transform = CATransform3DMakeScale(scale, scale, 1)
+        iconView.alphaValue = 0.84 + amount * 0.16
+        labelField.alphaValue = selected ? 1 : 0.72
+        labelField.textColor = selected ? .white : .white.withAlphaComponent(0.72)
+        wantsLayer = true
+        layer?.borderColor = accent.withAlpha(0.20 + amount * 0.48).cgColor
+        layer?.borderWidth = 0.7 + amount * 1.2
+        layer?.cornerRadius = bounds.width / 2
+    }
+}
 
-        drawRadialGradient(
-            context: context,
-            center: center,
-            radius: pedestalRadius,
-            colors: [
-                NSColor.white.withAlpha((hovered ? 45 / 255 : 28 / 255) * glow),
-                accent.withAlpha(18 / 255 * glow),
-                NSColor.white.withAlpha(0)
-            ],
-            locations: [0, 0.7, 1]
-        )
+private final class GlassCenterView: NSView {
+    private let glassView = makeGlassSurface()
+    private let iconView = NSImageView()
+    private let titleField = NSTextField(labelWithString: "")
 
-        context.setStrokeColor(NSColor.white.withAlpha(130 / 255 * glow).cgColor)
-        context.setLineWidth(hovered ? 1.3 : 0.9)
-        context.strokeEllipse(in: ellipseRect(center: center, radiusX: pedestalRadius, radiusY: pedestalRadius))
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.shadowColor = NSColor.black.cgColor
+        layer?.shadowOffset = CGSize(width: 0, height: -8)
+        layer?.shadowOpacity = 0.35
+        layer?.shadowRadius = 22
+
+        glassView.frame = bounds
+        glassView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(glassView)
+
+        iconView.imageScaling = .scaleProportionallyUpOrDown
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(iconView)
+
+        titleField.alignment = .center
+        titleField.font = .systemFont(ofSize: 12, weight: .bold)
+        titleField.textColor = .white
+        titleField.alphaValue = 0
+        titleField.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(titleField)
     }
 
-    private func drawLabel(text: String, rect: CGRect, prominent: Bool) {
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.alignment = .center
-        let font = NSFont.systemFont(ofSize: prominent ? 11 : 9, weight: prominent ? .medium : .regular)
-        let shadowAttributes: [NSAttributedString.Key: Any] = [
-            .font: font,
-            .foregroundColor: NSColor.black.withAlpha(120 / 255),
-            .paragraphStyle: paragraph
-        ]
-        text.draw(in: rect.offsetBy(dx: 0, dy: 1), withAttributes: shadowAttributes)
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: font,
-            .foregroundColor: prominent ? NSColor.white.withAlpha(245 / 255) : NSColor(calibratedRed: 230 / 255, green: 240 / 255, blue: 1, alpha: 210 / 255),
-            .paragraphStyle: paragraph
-        ]
-        text.draw(in: rect, withAttributes: attributes)
+    required init?(coder: NSCoder) {
+        nil
     }
+
+    override func layout() {
+        super.layout()
+        setFrameIfChanged(bounds, on: glassView)
+        applyCircularMask(to: glassView)
+        let iconSide = min(bounds.width, bounds.height) * 0.58
+        setFrameIfChanged(CGRect(x: (bounds.width - iconSide) / 2, y: (bounds.height - iconSide) / 2 - 6, width: iconSide, height: iconSide), on: iconView)
+        setFrameIfChanged(CGRect(x: -50, y: bounds.height + 8, width: bounds.width + 100, height: 20), on: titleField)
+        layer?.cornerRadius = bounds.width / 2
+    }
+
+    func configure(item: LauncherItem, accent: NSColor, phase: CGFloat) {
+        iconView.image = item.icon
+        titleField.stringValue = item.appName
+        titleField.alphaValue = 1
+        layer?.borderColor = accent.withAlpha(0.58 + 0.20 * sin(phase * 4)).cgColor
+        layer?.borderWidth = 1.7
+        layer?.transform = CATransform3DMakeScale(1.04 + 0.03 * sin(phase * 5), 1.04 + 0.03 * sin(phase * 5), 1)
+    }
+
+    func configureIdle(phase: CGFloat) {
+        iconView.image = NSImage(systemSymbolName: "sparkle.magnifyingglass", accessibilityDescription: nil)
+        titleField.alphaValue = 0
+        layer?.borderColor = NSColor.white.withAlphaComponent(0.22 + 0.12 * sin(phase * 3)).cgColor
+        layer?.borderWidth = 1.1
+        layer?.transform = CATransform3DMakeScale(1 + 0.025 * sin(phase * 4), 1 + 0.025 * sin(phase * 4), 1)
+    }
+}
+
+@MainActor
+private func makeGlassSurface() -> NSView {
+    if #available(macOS 26.0, *) {
+        let view = NSGlassEffectView(frame: .zero)
+        view.style = .regular
+        return view
+    }
+
+    let view = NSVisualEffectView(frame: .zero)
+    view.material = .hudWindow
+    view.blendingMode = .behindWindow
+    view.state = .active
+    return view
 }
 
 private func ellipseRect(center: CGPoint, radiusX: CGFloat, radiusY: CGFloat) -> CGRect {
@@ -358,22 +416,7 @@ private func drawRadialGradient(context: CGContext, center: CGPoint, radius: CGF
         colors: colors.map(\.cgColor) as CFArray,
         locations: locations
     ) else { return }
-    context.saveGState()
     context.drawRadialGradient(gradient, startCenter: center, startRadius: 0, endCenter: center, endRadius: radius, options: [.drawsAfterEndLocation])
-    context.restoreGState()
-}
-
-private func drawLinearGradient(context: CGContext, rect: CGRect, start: CGPoint, end: CGPoint, colors: [NSColor], locations: [CGFloat]) {
-    guard let gradient = CGGradient(
-        colorsSpace: CGColorSpaceCreateDeviceRGB(),
-        colors: colors.map(\.cgColor) as CFArray,
-        locations: locations
-    ) else { return }
-    context.saveGState()
-    context.addEllipse(in: rect)
-    context.clip()
-    context.drawLinearGradient(gradient, start: start, end: end, options: [])
-    context.restoreGState()
 }
 
 private func drawArc(context: CGContext, center: CGPoint, radius: CGFloat, startDegrees: CGFloat, sweepDegrees: CGFloat, color: NSColor, width: CGFloat) {
@@ -387,4 +430,15 @@ private func drawArc(context: CGContext, center: CGPoint, radius: CGFloat, start
 
 private func degreesToRadians(_ degrees: CGFloat) -> CGFloat {
     degrees * .pi / 180
+}
+
+private func radiansToDegrees(_ radians: CGFloat) -> CGFloat {
+    radians * 180 / .pi
+}
+
+@MainActor
+private func setFrameIfChanged(_ frame: CGRect, on view: NSView) {
+    if !view.frame.equalTo(frame) {
+        view.frame = frame
+    }
 }
