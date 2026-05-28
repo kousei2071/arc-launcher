@@ -13,10 +13,8 @@
     <key>EnvironmentVariables</key>
     <dict>
         <key>CYBER_LAUNCHER_NATIVE_GLASS</key>
-        <string>0</string>
-        <key>QT_MAC_WANTS_LAYER</key>
         <string>1</string>
-        <key>PYTHONUNBUFFERED</key>
+        <key>CYBER_LAUNCHER_START_VISIBLE</key>
         <string>1</string>
     </dict>
     <key>ProcessType</key>
