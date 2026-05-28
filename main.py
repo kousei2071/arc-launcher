@@ -19,6 +19,19 @@ from toggle_server import ToggleHttpServer
 
 START_VISIBLE = os.environ.get("CYBER_LAUNCHER_START_VISIBLE", "1") == "1"
 USE_MAC_GLASS = os.environ.get("CYBER_LAUNCHER_NATIVE_GLASS", "1") == "1"
+HIDE_DOCK = os.environ.get("CYBER_LAUNCHER_HIDE_DOCK", "1") == "1"
+
+
+def _hide_from_dock() -> None:
+    """Dock と Cmd+Tab から隠す（メニューバー常駐アプリ向け）。"""
+    if sys.platform != "darwin":
+        return
+    try:
+        from AppKit import NSApp, NSApplicationActivationPolicyAccessory
+
+        NSApp.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
+    except ImportError:
+        pass
 
 
 def _hotkey_display(hotkey: str) -> str:
@@ -97,6 +110,8 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("Cyber Launcher")
     app.setQuitOnLastWindowClosed(False)
+    if HIDE_DOCK:
+        _hide_from_dock()
     apply_cyber_theme(app)
 
     window = CircularLauncherWindow()

@@ -56,6 +56,139 @@ def is_available() -> bool:
     return is_vibrancy_available() or is_liquid_glass_available()
 
 
+def raise_qt_content_above_glass(widget: QWidget) -> None:
+    """NSVisualEffectView 再合成後に Qt 描画レイヤーを前面へ戻す。"""
+    if sys.platform != "darwin" or int(widget.winId()) == 0:
+        return
+
+    try:
+        import objc
+        from ctypes import c_void_p
+
+        ns_view = objc.objc_object(c_void_p=int(widget.winId()))
+        if ns_view is not None:
+            _raise_qt_above_glass(ns_view)
+    except Exception:
+        pass
+
+
+_outside_click_monitor = None
+
+
+def dismiss_mac_window(widget: QWidget) -> None:
+    """Qt hide() だけでは解消しない幽霊表示を NSWindow.orderOut で確実に消す。"""
+    if sys.platform != "darwin" or int(widget.winId()) == 0:
+        return
+
+    try:
+        import objc
+        from ctypes import c_void_p
+
+        ns_view = objc.objc_object(c_void_p=int(widget.winId()))
+        if ns_view is None:
+            return
+
+        ns_window = ns_view.window()
+        if ns_window is not None:
+            ns_window.orderOut_(None)
+    except Exception:
+        pass
+
+
+def start_outside_click_dismiss(widget: QWidget, on_outside) -> None:
+    """ランチャー外クリック（デスクトップ含む）で on_outside を呼ぶ。要アクセシビリティ。"""
+    global _outside_click_monitor
+
+    stop_outside_click_dismiss()
+    if sys.platform != "darwin" or int(widget.winId()) == 0:
+        return
+
+    try:
+        from AppKit import NSEvent, NSLeftMouseDownMask, NSMouseInRect, NSRightMouseDownMask
+        from PyQt6.QtCore import QTimer
+    except ImportError:
+        return
+
+    def _handler(_event) -> None:
+        try:
+            import objc
+            from ctypes import c_void_p
+
+            ns_view = objc.objc_object(c_void_p=int(widget.winId()))
+            if ns_view is None:
+                return
+
+            ns_window = ns_view.window()
+            if ns_window is None:
+                return
+
+            click = NSEvent.mouseLocation()
+            if NSMouseInRect(click, ns_window.frame(), False):
+                return
+
+            QTimer.singleShot(0, on_outside)
+        except Exception:
+            pass
+
+    monitor = NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(
+        NSLeftMouseDownMask | NSRightMouseDownMask,
+        _handler,
+    )
+    if monitor is not None:
+        _outside_click_monitor = monitor
+
+
+def stop_outside_click_dismiss() -> None:
+    global _outside_click_monitor
+
+    if _outside_click_monitor is None:
+        return
+
+    try:
+        from AppKit import NSEvent
+
+        NSEvent.removeMonitor_(_outside_click_monitor)
+    except Exception:
+        pass
+    _outside_click_monitor = None
+
+
+def apply_mac_window_presentation(widget: QWidget) -> None:
+    """デスクトップ／他アプリ操作後も前面に出すための NSWindow 設定。"""
+    if sys.platform != "darwin" or int(widget.winId()) == 0:
+        return
+
+    try:
+        import objc
+        from ctypes import c_void_p
+        from AppKit import (
+            NSApp,
+            NSFloatingWindowLevel,
+            NSWindowCollectionBehaviorCanJoinAllSpaces,
+            NSWindowCollectionBehaviorFullScreenAuxiliary,
+        )
+
+        NSApp.activateIgnoringOtherApps_(True)
+
+        ns_view = objc.objc_object(c_void_p=int(widget.winId()))
+        if ns_view is None:
+            return
+
+        ns_window = ns_view.window()
+        if ns_window is None:
+            return
+
+        ns_window.setLevel_(NSFloatingWindowLevel)
+        behavior = int(ns_window.collectionBehavior())
+        behavior |= int(NSWindowCollectionBehaviorCanJoinAllSpaces)
+        behavior |= int(NSWindowCollectionBehaviorFullScreenAuxiliary)
+        ns_window.setCollectionBehavior_(behavior)
+        ns_window.orderFrontRegardless()
+        raise_qt_content_above_glass(widget)
+    except Exception:
+        pass
+
+
 def apply_mac_transparency(widget: QWidget) -> None:
     if sys.platform != "darwin" or int(widget.winId()) == 0:
         return
