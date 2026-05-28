@@ -35,9 +35,12 @@ from PyQt6.QtWidgets import QApplication, QWidget
 from app_icons import load_mac_app_icon
 from mac_vibrancy import apply_mac_transparency
 from mac_vibrancy import apply_mac_window_presentation
+from mac_vibrancy import dismiss_mac_window
 from mac_vibrancy import is_available as native_glass_available
 from mac_vibrancy import raise_qt_content_above_glass
 from mac_vibrancy import schedule_mac_glass
+from mac_vibrancy import start_outside_click_dismiss
+from mac_vibrancy import stop_outside_click_dismiss
 
 WINDOW_SIZE = 540
 ORBIT_RADIUS = 178
@@ -400,13 +403,16 @@ class CursorRadialMenu(QWidget):
             super().mousePressEvent(event)
             return
         idx = self.index_at(event.position())
+        w = self.window()
+        dismiss = getattr(w, "_dismiss", None)
         if idx is not None:
             self._items[idx].action()
-            w = self.window()
-            if w is not None:
-                w.hide()
-                if hasattr(w, "_shown"):
-                    w._shown = False
+            if callable(dismiss):
+                dismiss()
+            return
+        if callable(dismiss):
+            dismiss()
+            return
         super().mousePressEvent(event)
 
     def paintEvent(self, _event) -> None:  # noqa: N802
@@ -642,28 +648,32 @@ class CircularLauncherWindow(CursorRadialMenu):
         self.move(x, y)
 
     def _sync_shown_state(self) -> None:
-        """Qt の実表示と内部フラグのズレを解消（スペース切替・デスクトップ表示後）。"""
+        """最小化・非表示になったら内部フラグと監視を止める。"""
         if not self.isVisible() or self.isMinimized():
             self._shown = False
-
-    def _is_effectively_visible(self) -> bool:
-        self._sync_shown_state()
-        return self._shown
+            stop_outside_click_dismiss()
 
     @pyqtSlot()
     def toggle_visibility(self) -> None:
-        if self._is_effectively_visible():
+        if self._shown:
             self._dismiss()
         else:
             self.present()
 
     def _dismiss(self) -> None:
+        self._shown = False
+        stop_outside_click_dismiss()
         self.clearMask()
         self.hide()
-        self._shown = False
+        dismiss_mac_window(self)
+        if self.isVisible():
+            self.setVisible(False)
+            dismiss_mac_window(self)
 
     def present(self) -> None:
-        self._sync_shown_state()
+        if self.isVisible():
+            dismiss_mac_window(self)
+            self.hide()
         self._move_to_cursor()
         self._set_hover(None)
         apply_mac_transparency(self)
@@ -673,11 +683,14 @@ class CircularLauncherWindow(CursorRadialMenu):
         self.raise_()
         self.activateWindow()
         self._shown = True
+        start_outside_click_dismiss(self, self._dismiss)
 
         if self._mac_glass_enabled and self._glass_kind == "none":
             panel = min(self.width(), self.height()) * 0.9
 
             def _on_glass(mode: str) -> None:
+                if not self._shown:
+                    return
                 self._glass_kind = mode
                 apply_mac_transparency(self)
                 apply_mac_window_presentation(self)
@@ -711,6 +724,7 @@ class CircularLauncherWindow(CursorRadialMenu):
 
     def hideEvent(self, event) -> None:  # noqa: N802
         self._shown = False
+        stop_outside_click_dismiss()
         super().hideEvent(event)
 
     def changeEvent(self, event) -> None:  # noqa: N802
