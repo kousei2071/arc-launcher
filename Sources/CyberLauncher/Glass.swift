@@ -23,6 +23,14 @@ func configureTransparentWindow(_ window: NSWindow) {
 }
 
 @MainActor
+func applyCircularMask(to view: NSView) {
+    view.wantsLayer = true
+    view.layer?.backgroundColor = NSColor.clear.cgColor
+    view.layer?.cornerRadius = min(view.bounds.width, view.bounds.height) / 2
+    view.layer?.masksToBounds = true
+}
+
+@MainActor
 func installGlass(in window: NSWindow, contentView: NSView) -> GlassMode {
     guard nativeGlassAvailable() else {
         return .none
@@ -37,6 +45,7 @@ func installGlass(in window: NSWindow, contentView: NSView) -> GlassMode {
             let glassView = NSGlassEffectView(frame: contentView.bounds)
             glassView.autoresizingMask = [.width, .height]
             glassView.style = .regular
+            applyCircularMask(to: glassView)
             contentView.addSubview(glassView, positioned: .below, relativeTo: nil)
             configureTransparentWindow(window)
             return .liquid
@@ -48,6 +57,7 @@ func installGlass(in window: NSWindow, contentView: NSView) -> GlassMode {
     effectView.material = .underWindowBackground
     effectView.blendingMode = .behindWindow
     effectView.state = .active
+    applyCircularMask(to: effectView)
     contentView.addSubview(effectView, positioned: .below, relativeTo: nil)
     configureTransparentWindow(window)
     return .vibrancy

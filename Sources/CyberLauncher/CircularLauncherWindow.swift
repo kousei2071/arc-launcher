@@ -23,8 +23,9 @@ final class CircularLauncherWindow: NSWindow {
         configureTransparentWindow(self)
 
         contentView = NSView(frame: NSRect(x: 0, y: 0, width: windowSize, height: windowSize))
-        contentView?.wantsLayer = true
-        contentView?.layer?.backgroundColor = NSColor.clear.cgColor
+        if let contentView {
+            applyCircularMask(to: contentView)
+        }
         launcherView.launcherWindow = self
         launcherView.frame = contentView?.bounds ?? .zero
         launcherView.autoresizingMask = [.width, .height]
