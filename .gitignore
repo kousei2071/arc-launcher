@@ -63,3 +63,6 @@ coverage.xml
 *.spec.bak
 *.manifest
 *.log
+
+# SwiftPM
+.build/

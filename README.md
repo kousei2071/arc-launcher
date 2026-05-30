@@ -13,17 +13,15 @@ macOS 向けの円形デスクトップランチャー。カーソル位置に L
 ## 必要条件
 
 - macOS（主要ターゲット）
-- Python 3.10 以上
+- Xcode / Command Line Tools（SwiftPM）
 
 ## セットアップ
 
 ```bash
 git clone <repository-url>
-cd desktop_app
+cd arc-launcher
 
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+swift build
 ```
 
 ## 起動
@@ -35,8 +33,7 @@ pip install -r requirements.txt
 または:
 
 ```bash
-source .venv/bin/activate
-python main.py
+swift run CyberLauncher
 ```
 
 ## 操作
@@ -83,7 +80,7 @@ touch ~/Library/Application\ Support/CyberLauncher/toggle
 ./scripts/uninstall-launch-agent.sh
 ```
 
-LaunchAgent 利用時は **システム設定 → プライバシーとセキュリティ → アクセシビリティ** に、実行中の Python を追加してください。
+LaunchAgent インストール時に release ビルドを作成し、その実行ファイルをログイン時に起動します。
 
 ## 環境変数
 
@@ -91,7 +88,7 @@ LaunchAgent 利用時は **システム設定 → プライバシーとセキュ
 |------|-----------|------|
 | `CYBER_LAUNCHER_START_VISIBLE` | `1` | 起動時にランチャーを表示する |
 | `CYBER_LAUNCHER_NATIVE_GLASS` | `1` | macOS ネイティブガラス（`NSVisualEffectView`）を使う |
-| `CYBER_LAUNCHER_LIQUID` | `0` | macOS 26+ で Liquid Glass（`NSGlassEffectView`）を有効化 |
+| `CYBER_LAUNCHER_LIQUID` | `0` | macOS 26+ で Liquid Glass 表示を優先 |
 
 例:
 
@@ -101,14 +98,14 @@ CYBER_LAUNCHER_START_VISIBLE=0 CYBER_LAUNCHER_LIQUID=1 ./start.sh
 
 ## アプリのカスタマイズ
 
-デフォルトのアプリ一覧は `cyber_launcher.py` の `default_items()` で定義されています。`app_names` リストを編集すると、ラジアルメニューに表示するアプリを変更できます。
+デフォルトのアプリ一覧は `Sources/CyberLauncher/LauncherItem.swift` の `defaultItems()` で定義されています。配列を編集すると、ラジアルメニューに表示するアプリを変更できます。
 
-```python
-app_names = [
+```swift
+[
     "Finder",
     "Dia",
     "Terminal",
-    # ...
+    // ...
 ]
 ```
 
@@ -117,14 +114,10 @@ app_names = [
 ## プロジェクト構成
 
 ```
-main.py              エントリポイント（トレイ・ショートカット・HTTP サーバー）
-cyber_launcher.py    円形ラジアル UI
-app_icons.py         macOS アプリアイコン取得
-mac_vibrancy.py      NSVisualEffectView / NSGlassEffectView
-hotkey.py            グローバルショートカット
-mac_hotkey.py        macOS ネイティブホットキー
-toggle_server.py     localhost HTTP トグル（ポート 39281）
-toggle_trigger.py    ファイルトリガー
+Package.swift                      SwiftPM パッケージ定義
+Sources/CyberLauncher/main.swift   エントリポイント
+Sources/CyberLauncher/             AppKit ラジアル UI・ホットキー・トグル実装
+Tests/CyberLauncherTests/          ラジアル選択ロジックのテスト
 start.sh             起動スクリプト
 scripts/             LaunchAgent・ショートカット登録用
 ```
@@ -133,12 +126,11 @@ scripts/             LaunchAgent・ショートカット登録用
 
 **ショートカットが反応しない**
 
-- アクセシビリティ権限を確認（**プライバシーとセキュリティ → アクセシビリティ**）
+- 他アプリやシステムショートカットとの競合を確認
 - `./scripts/install-macos-shortcut.sh` でサービス経由のトグルを設定
 
 **ガラス効果が表示されない**
 
-- `pip install pyobjc-framework-Cocoa` が入っているか確認
 - `CYBER_LAUNCHER_NATIVE_GLASS=1` を設定
 - Liquid Glass は macOS 26+ かつ `CYBER_LAUNCHER_LIQUID=1` が必要
 
